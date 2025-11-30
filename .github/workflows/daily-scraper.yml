@@ -27,6 +27,11 @@ jobs:
         pip install --upgrade pip
         pip install -r requirements.txt
     
+    - name: Playwrightブラウザをインストール
+      run: |
+        playwright install chromium
+        playwright install-deps chromium
+    
     - name: 画像スクレイピングを実行
       env:
         DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
