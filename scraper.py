@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-アキバBlog画像自動ダウンロードスクリプト
-指定したウェブサイトから画像を取得し、Dropboxへアップロードします。
+アキバBlog画像自動ダウンロードスクリプト（Playwright版）
+iframe内の広告画像と左右サイドバーの画像を取得します。
 """
 
 import os
@@ -11,9 +11,10 @@ import time
 import logging
 from datetime import datetime
 from pathlib import Path
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
+import asyncio
+from playwright.async_api import async_playwright
 import requests
-from bs4 import BeautifulSoup
 from PIL import Image
 from io import BytesIO
 import dropbox
@@ -32,19 +33,14 @@ logger = logging.getLogger(__name__)
 
 # 設定
 TARGET_URL = "https://akibablog.blog.jp/"
-MIN_IMAGE_SIZE = 10  # 最小画像サイズ（px）
-SLEEP_TIME = 1  # 画像取得間の待機時間（秒）
+MIN_IMAGE_HEIGHT = 250  # 最小画像高さ（px）- サムネイルを除外
 DROPBOX_FOLDER = "/akiba-images"  # Dropbox保存先フォルダ
 VALID_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.webp', '.gif')
 
-# 除外するURLパターン（アイコン、バナー等）
-EXCLUDE_PATTERNS = [
-    'counter',
-    'banner',
-    'bunner',
-    'icon',
-    'button',
-    'small_parts'
+# 取得対象ドメイン
+TARGET_DOMAINS = [
+    'livedoor.blogimg.jp',  # 左右サイドバー画像
+    'reajyu.net'  # iframe内広告画像
 ]
 
 
@@ -53,10 +49,6 @@ class ImageScraper:
     
     def __init__(self, target_url, dropbox_token):
         self.target_url = target_url
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        })
         
         # Dropboxクライアント初期化
         if dropbox_token:
@@ -75,45 +67,79 @@ class ImageScraper:
         self.skipped_count = 0
         self.error_count = 0
     
-    def fetch_page(self):
-        """ページを取得"""
-        try:
-            logger.info(f"ページ取得開始: {self.target_url}")
-            response = self.session.get(self.target_url, timeout=30)
-            response.raise_for_status()
-            response.encoding = response.apparent_encoding
-            logger.info("ページ取得成功")
-            return response.text
-        except Exception as e:
-            logger.error(f"ページ取得エラー: {e}")
-            return None
-    
-    def extract_image_urls(self, html):
-        """HTMLから画像URLを抽出"""
-        soup = BeautifulSoup(html, 'html.parser')
+    async def extract_image_urls(self):
+        """Playwrightを使用して画像URLを抽出"""
         image_urls = []
         
-        for img in soup.find_all('img'):
-            src = img.get('src')
-            if not src:
-                continue
+        async with async_playwright() as p:
+            logger.info("ブラウザを起動中...")
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page()
             
-            # 絶対URLに変換
-            absolute_url = urljoin(self.target_url, src)
+            try:
+                logger.info(f"ページにアクセス: {self.target_url}")
+                await page.goto(self.target_url, wait_until='networkidle', timeout=60000)
+                
+                # ページが完全に読み込まれるまで少し待機
+                await page.wait_for_timeout(3000)
+                
+                # メインページの画像を取得
+                main_images = await page.evaluate('''() => {
+                    const images = Array.from(document.querySelectorAll('img'));
+                    return images.map(img => ({
+                        src: img.src,
+                        width: img.naturalWidth,
+                        height: img.naturalHeight
+                    }));
+                }''')
+                
+                logger.info(f"メインページから {len(main_images)} 件の画像を検出")
+                
+                for img in main_images:
+                    if img['src'] and img['height'] >= MIN_IMAGE_HEIGHT:
+                        # 対象ドメインの画像のみ
+                        if any(domain in img['src'] for domain in TARGET_DOMAINS):
+                            image_urls.append(img['src'])
+                            logger.info(f"対象画像: {img['src']} ({img['width']}x{img['height']})")
+                
+                # iframe内の画像を取得
+                frames = page.frames
+                logger.info(f"{len(frames)} 個のフレームを検出")
+                
+                for frame in frames:
+                    try:
+                        frame_url = frame.url
+                        if not frame_url or frame_url == 'about:blank':
+                            continue
+                        
+                        logger.info(f"フレームを調査: {frame_url}")
+                        
+                        # フレーム内の画像を取得
+                        frame_images = await frame.evaluate('''() => {
+                            const images = Array.from(document.querySelectorAll('img'));
+                            return images.map(img => ({
+                                src: img.src,
+                                width: img.naturalWidth || img.width,
+                                height: img.naturalHeight || img.height
+                            }));
+                        }''')
+                        
+                        for img in frame_images:
+                            if img['src']:
+                                # reajyu.netドメインの画像は全て取得
+                                if 'reajyu.net' in img['src']:
+                                    image_urls.append(img['src'])
+                                    logger.info(f"iframe内画像: {img['src']} ({img['width']}x{img['height']})")
+                    
+                    except Exception as e:
+                        logger.debug(f"フレーム処理エラー: {e}")
+                        continue
+                
+            except Exception as e:
+                logger.error(f"ページ取得エラー: {e}")
             
-            # 除外パターンチェック
-            if any(pattern in absolute_url.lower() for pattern in EXCLUDE_PATTERNS):
-                logger.debug(f"除外: {absolute_url}")
-                continue
-            
-            # 拡張子チェック
-            parsed = urlparse(absolute_url)
-            path = parsed.path.lower()
-            if not any(path.endswith(ext) for ext in VALID_EXTENSIONS):
-                logger.debug(f"拡張子不一致: {absolute_url}")
-                continue
-            
-            image_urls.append(absolute_url)
+            finally:
+                await browser.close()
         
         # 重複除去
         image_urls = list(dict.fromkeys(image_urls))
@@ -123,27 +149,12 @@ class ImageScraper:
     def download_image(self, url):
         """画像をダウンロード"""
         try:
-            response = self.session.get(url, timeout=30)
+            response = requests.get(url, timeout=30)
             response.raise_for_status()
             return response.content
         except Exception as e:
             logger.error(f"画像ダウンロードエラー ({url}): {e}")
             return None
-    
-    def check_image_size(self, image_data):
-        """画像サイズをチェック"""
-        try:
-            img = Image.open(BytesIO(image_data))
-            width, height = img.size
-            
-            if width < MIN_IMAGE_SIZE or height < MIN_IMAGE_SIZE:
-                logger.debug(f"画像サイズが小さすぎる: {width}x{height}")
-                return False
-            
-            return True
-        except Exception as e:
-            logger.error(f"画像サイズチェックエラー: {e}")
-            return False
     
     def generate_filename(self, url):
         """ファイル名を生成（日付プレフィックス付き）"""
@@ -187,20 +198,15 @@ class ImageScraper:
             logger.error(f"Dropboxアップロードエラー ({filename}): {e}")
             return False
     
-    def run(self):
+    async def run(self):
         """メイン処理"""
         logger.info("=" * 60)
         logger.info("画像スクレイピング開始")
         logger.info("=" * 60)
         
-        # ページ取得
-        html = self.fetch_page()
-        if not html:
-            logger.error("ページ取得に失敗したため終了します")
-            return
-        
         # 画像URL抽出
-        image_urls = self.extract_image_urls(html)
+        image_urls = await self.extract_image_urls()
+        
         if not image_urls:
             logger.warning("画像が見つかりませんでした")
             return
@@ -215,12 +221,6 @@ class ImageScraper:
                 self.error_count += 1
                 continue
             
-            # サイズチェック
-            if not self.check_image_size(image_data):
-                logger.info(f"スキップ（サイズ不足）: {url}")
-                self.skipped_count += 1
-                continue
-            
             # ファイル名生成
             filename = self.generate_filename(url)
             
@@ -232,7 +232,7 @@ class ImageScraper:
             
             # 待機（サーバー負荷軽減）
             if i < len(image_urls):
-                time.sleep(SLEEP_TIME)
+                time.sleep(1)
         
         # 結果サマリー
         logger.info("=" * 60)
@@ -254,7 +254,7 @@ def main():
     
     # スクレイパー実行
     scraper = ImageScraper(TARGET_URL, dropbox_token)
-    scraper.run()
+    asyncio.run(scraper.run())
 
 
 if __name__ == "__main__":
