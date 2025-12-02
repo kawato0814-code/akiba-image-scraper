@@ -245,17 +245,18 @@ class ImageScraper:
 
 def main():
     """エントリーポイント"""
-    # 環境変数からDropboxトークンを取得
-    dropbox_token = os.environ.get('DROPBOX_ACCESS_TOKEN')
+    # 環境変数からDropbox認証情報を取得
+    app_key = os.environ.get('DROPBOX_APP_KEY')
+    app_secret = os.environ.get('DROPBOX_APP_SECRET')
+    refresh_token = os.environ.get('DROPBOX_REFRESH_TOKEN')
     
-    if not dropbox_token:
-        logger.warning("環境変数 DROPBOX_ACCESS_TOKEN が設定されていません")
+    if not (app_key and app_secret and refresh_token):
+        logger.warning("環境変数 DROPBOX_APP_KEY, DROPBOX_APP_SECRET, DROPBOX_REFRESH_TOKEN が設定されていません")
         logger.warning("画像はローカルの downloaded_images フォルダに保存されます")
     
     # スクレイパー実行
-    scraper = ImageScraper(TARGET_URL, dropbox_token)
+    scraper = ImageScraper(TARGET_URL, app_key, app_secret, refresh_token)
     asyncio.run(scraper.run())
-
 
 if __name__ == "__main__":
     main()
