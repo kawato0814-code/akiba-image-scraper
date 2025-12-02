@@ -34,7 +34,9 @@ jobs:
     
     - name: 画像スクレイピングを実行
       env:
-        DROPBOX_ACCESS_TOKEN: ${{ secrets.DROPBOX_ACCESS_TOKEN }}
+        DROPBOX_APP_KEY: ${{ secrets.DROPBOX_APP_KEY }}
+        DROPBOX_APP_SECRET: ${{ secrets.DROPBOX_APP_SECRET }}
+        DROPBOX_REFRESH_TOKEN: ${{ secrets.DROPBOX_REFRESH_TOKEN }}
       run: |
         python scraper.py
     
