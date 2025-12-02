@@ -50,9 +50,13 @@ class ImageScraper:
      def __init__(self, target_url, app_key, app_secret, refresh_token ):
         self.target_url = target_url
         
-        # Dropboxクライアント初期化
-        if dropbox_token:
-            self.dbx = dropbox.Dropbox(dropbox_token)
+    # Dropboxクライアント初期化（リフレッシュトークン対応 ）
+        if app_key and app_secret and refresh_token:
+            self.dbx = dropbox.Dropbox(
+                app_key=app_key,
+                app_secret=app_secret,
+                oauth2_refresh_token=refresh_token
+            )
             try:
                 self.dbx.users_get_current_account()
                 logger.info("Dropbox認証成功")
@@ -60,7 +64,7 @@ class ImageScraper:
                 logger.error(f"Dropbox認証失敗: {e}")
                 self.dbx = None
         else:
-            logger.warning("DropboxトークンがないためローカルPCに保存します")
+            logger.warning("Dropbox認証情報がないためローカルPCに保存します")
             self.dbx = None
         
         self.downloaded_count = 0
