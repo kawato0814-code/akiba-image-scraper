@@ -47,10 +47,10 @@ TARGET_DOMAINS = [
 class ImageScraper:
     """画像スクレイピングクラス"""
     
-     def __init__(self, target_url, app_key, app_secret, refresh_token ):
+    def __init__(self, target_url, app_key, app_secret, refresh_token):
         self.target_url = target_url
         
-    # Dropboxクライアント初期化（リフレッシュトークン対応 ）
+        # Dropboxクライアント初期化（リフレッシュトークン対応）
         if app_key and app_secret and refresh_token:
             self.dbx = dropbox.Dropbox(
                 app_key=app_key,
